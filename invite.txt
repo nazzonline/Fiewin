@@ -1,0 +1,49 @@
+module.exports = async (bot, db, msg) => {
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id;
+
+  // Get this user's record
+  const [userRows] = await db.query(
+    "SELECT id FROM users WHERE telegram_id = ?", [telegramId]
+  );
+  if (!userRows.length) {
+    await bot.sendMessage(chatId, '❌ Please register first with /start.');
+    return;
+  }
+  const userId = userRows[0].id;
+
+  // Referral total earned
+  const [sumRows] = await db.query(
+    'SELECT total_earned FROM referrals WHERE telegram_id = ?', [telegramId]
+  );
+  // FIX: Access first row, not property of array
+  const totalEarned = sumRows.length ? sumRows[0].total_earned : 0;
+
+  // Total referred users (from users table using refer_id)
+  const [refRows] = await db.query(
+    'SELECT COUNT(*) AS n FROM users WHERE refer_id = ?', [userId]
+  );
+  // FIX: Access first row, not property of array
+  const totalReferrals = refRows.length ? refRows[0].n : 0;
+
+  // Prepare their unique invite link
+  const botUser = process.env.BOT_USERNAME || 'YourBotUsername';
+  const inviteLink = `https://t.me/${botUser}?start=ref${telegramId}`;
+
+  await bot.sendMessage(chatId,
+`🤝 <b>Your Referral Stats</b>
+
+🔗 <b>Your Invite Link:</b>
+<code>${inviteLink}</code>
+
+🆔 <b>Your Code:</b> <code>${telegramId}</code>
+
+💸 <b>Total Earned from Referrals:</b> <b>${totalEarned}</b> TRX
+
+👥 <b>Total Referrals:</b> <b>${totalReferrals}</b>
+
+——
+📢 <i>Share your link/code above—earn every time your friends play or claim!</i>`,
+    { parse_mode: "HTML" }
+  );
+};

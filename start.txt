@@ -1,0 +1,43 @@
+const moment = require('moment-timezone');
+const { mainKeyboard } = require('../keyboard');
+
+module.exports = async (bot, db, msg) => {
+  try {
+    const chatId = msg.chat.id;
+    const from = msg.from;
+
+    const joinedDateIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm:ss');
+
+    const telegramId = from.id;
+    const username = from.username || null;
+    const firstName = from.first_name || null;
+    const lastName = from.last_name || null;
+
+    // Check if user already exists
+    const [users] = await db.query("SELECT id FROM users WHERE telegram_id = ?", [telegramId]);
+
+    // If not, create user
+    if (!users.length) {
+      await db.query(
+        `INSERT INTO users 
+        (telegram_id, username, first_name, last_name, joined_date, wallet_balance, total_wagered, level) 
+        VALUES (?, ?, ?, ?, ?, 0, 0, 1)`,
+        [telegramId, username, firstName, lastName, joinedDateIST]
+      );
+      await bot.sendMessage(chatId, `Welcome, ${firstName || ''}! Your account has been registered.`, mainKeyboard);
+    } else {
+      // If user exists, optionally update their info
+      await db.query(
+        `UPDATE users SET
+          username = ?,
+          first_name = ?,
+          last_name = ?
+        WHERE telegram_id = ?`,
+        [username, firstName, lastName, telegramId]
+      );
+      await bot.sendMessage(chatId, `Hi, ${firstName || ''}! You are already registered.`, mainKeyboard);
+    }
+  } catch (error) {
+    console.error('Error in /start handler:', error);
+  }
+};

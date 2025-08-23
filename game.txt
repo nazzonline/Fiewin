@@ -1,0 +1,140 @@
+const userSelections = {};
+const betLock = {}; // Prevents double bets while a round is playing
+
+function getKeyboard(selected = null) {
+  return {
+    inline_keyboard: [
+      [
+        { text: selected === 10 ? "Bet 10 ✅️" : "Bet 10", callback_data: "bet_10" },
+        { text: selected === 50 ? "Bet 50 ✅️" : "Bet 50", callback_data: "bet_50" },
+        { text: selected === 100 ? "Bet 100 ✅️" : "Bet 100", callback_data: "bet_100" }
+      ],
+      [
+        { text: "⚽ Place Bet!", callback_data: "place_bet" }
+      ]
+    ]
+  };
+}
+
+module.exports = async (bot, db, msg) => {
+  const chatId = msg.chat.id;
+  userSelections[msg.from.id] = null;
+  betLock[msg.from.id] = false;
+
+  await bot.sendMessage(
+    chatId,
+    "⚽ Football Penalty Game:\nChoose your bet amount, then press Place Bet!",
+    { reply_markup: getKeyboard(null) }
+  );
+};
+
+module.exports.handleCallbackQuery = async (bot, db, query) => {
+  const chatId = query.message.chat.id;
+  const telegramId = query.from.id;
+  const messageId = query.message.message_id;
+
+  // If a bet round is ongoing, ignore further actions except showing a warning
+  if (betLock[telegramId] && query.data === "place_bet") {
+    await bot.answerCallbackQuery(query.id, { text: "Wait for the current round to finish!", show_alert: true });
+    return;
+  }
+
+  if (query.data.startsWith("bet_")) {
+    const amount = parseInt(query.data.split("_")[1]);
+    if (userSelections[telegramId] === amount) {
+      await bot.answerCallbackQuery(query.id, { text: "Already selected!", show_alert: true });
+      return;
+    }
+    userSelections[telegramId] = amount;
+    await bot.editMessageReplyMarkup(
+      getKeyboard(amount),
+      { chat_id: chatId, message_id: messageId }
+    );
+    await bot.answerCallbackQuery(query.id, { text: `Selected bet: ₹${amount}` });
+    return;
+  }
+
+  if (query.data === "place_bet") {
+    const selectedAmount = userSelections[telegramId];
+    if (!selectedAmount) {
+      await bot.answerCallbackQuery(query.id, { text: "Choose your bet amount first!", show_alert: true });
+      return;
+    }
+    // Lock bets for this user for the current round
+    betLock[telegramId] = true;
+
+    // Check balance
+    let user;
+    try {
+      const [rows] = await db.query(
+        "SELECT id, wallet_balance FROM users WHERE telegram_id = ?",
+        [telegramId]
+      );
+      if (!rows.length) {
+        await bot.answerCallbackQuery(query.id, { text: "Please register with /start first.", show_alert: true });
+        betLock[telegramId] = false;
+        return;
+      }
+      user = rows[0];
+      if (user.wallet_balance < selectedAmount) {
+        await bot.answerCallbackQuery(query.id, { text: "❌ Insufficient balance.", show_alert: true });
+        betLock[telegramId] = false;
+        return;
+      }
+    } catch (error) {
+      await bot.answerCallbackQuery(query.id, { text: "Error retrieving balance.", show_alert: true });
+      betLock[telegramId] = false;
+      return;
+    }
+
+    // Deduct bet before dice play
+    const newBalance = user.wallet_balance - selectedAmount;
+    await db.query(
+      "UPDATE users SET wallet_balance = ?, total_wagered = total_wagered + ? WHERE id = ?",
+      [newBalance, selectedAmount, user.id]
+    );
+
+    // Delete the bet UI message
+    await bot.deleteMessage(chatId, messageId);
+
+    // Show Telegram football dice (animated)
+    const diceMsg = await bot.sendDice(chatId, { emoji: "⚽" });
+
+    setTimeout(async () => {
+      const value = diceMsg.dice.value;
+      const won = value === 4 || value === 5;
+      const winAmount = won ? selectedAmount * 2 : 0;
+
+      // Update DB and balance if won
+      if (won) {
+        await db.query(
+          "UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?",
+          [winAmount, user.id]
+        );
+      }
+      await db.query(
+        "INSERT INTO games (user_id, bet_amount, result, win, played_at) VALUES (?, ?, ?, ?, ?)",
+        [user.id, selectedAmount, won ? "won" : "lose", won ? 1 : 0, new Date()]
+      );
+
+      // Send result message
+      await bot.sendMessage(
+        chatId,
+        won
+          ? `🥅 GOAL!\n🏆 You win ₹${winAmount}! New balance: ₹${newBalance + winAmount}`
+          : `🥅 Missed!\n😞 You lost ₹${selectedAmount}. New balance: ₹${newBalance}`
+      );
+
+      // Unlock bets and repeat game
+      userSelections[telegramId] = null;
+      betLock[telegramId] = false;
+      await bot.sendMessage(
+        chatId,
+        "⚽ Football Penalty Game:\nChoose your bet amount, then press Place Bet!",
+        { reply_markup: getKeyboard(null) }
+      );
+    }, 2000);
+
+    return;
+  }
+};

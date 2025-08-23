@@ -1,0 +1,16 @@
+{
+  "name": "telegram-bot",
+  "version": "1.0.0",
+  "description": "A superfast Telegram bot with MySQL and persistent pooling.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.11.0",
+    "dotenv": "^16.6.1",
+    "moment-timezone": "^0.6.0",
+    "mysql2": "^3.0.0",
+    "node-telegram-bot-api": "^0.63.0"
+  }
+}
